@@ -1148,13 +1148,18 @@ if('serviceWorker' in navigator)
 document.getElementById('fileInput').addEventListener('change',function(e){
   if(e.target.files[0]){doImport(e.target.files[0]);e.target.value='';}});
 
-const savedCfg=localStorage.getItem('hy_fb_cfg');
-if(savedCfg){
-  try{initFirebase(JSON.parse(savedCfg));}
-  catch{document.getElementById('setup').style.display='flex';}
-} else {
-  document.getElementById('setup').style.display='flex';
-}
+// ── Firebase config 已預設，直接自動連線 ──
+const HY_CFG = {
+  apiKey: "AIzaSyCP3Y0KxJbzZIQHAG48TaRmmTiwytJ22Ek",
+  authDomain: "hongyang-report.firebaseapp.com",
+  databaseURL: "https://hongyang-report-default-rtdb.firebaseio.com",
+  projectId: "hongyang-report",
+  storageBucket: "hongyang-report.firebasestorage.app",
+  messagingSenderId: "1012399859153",
+  appId: "1:1012399859153:web:1faa27f8eba459cafbecf0"
+};
+document.getElementById('setup').style.display='none';
+initFirebase(HY_CFG);
 </script>
 </body>
 </html>
