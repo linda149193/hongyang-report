@@ -421,17 +421,44 @@ let _myName='';
    FIREBASE SETUP
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 function connectFirebase(){
-  const raw=document.getElementById('cfg').value.trim();
   const errEl=document.getElementById('cfg-err');
   errEl.style.display='none';
-  let cfg;
-  try{ cfg=Function('return ('+raw.replace(/\/\/.*/g,'')+')'); cfg=cfg(); }
-  catch(e){ showErr('❌ 格式錯誤：'+e.message); return; }
-  if(!cfg.apiKey||!cfg.databaseURL){
-    showErr('❌ 缺少 apiKey 或 databaseURL，請確認已建立 Realtime Database'); return; }
-  localStorage.setItem('hy_fb_cfg', JSON.stringify(cfg));
+  const raw=document.getElementById('cfg').value;
+
+  // Extract values by key name regardless of quote style
+  function extract(key){
+    const re=new RegExp(key+'["\']?\\s*:\\s*["\u201C\u201D\u2018\u2019]([^"\u201C\u201D\u2018\u2019,}\\n]+)["\u201C\u201D\u2018\u2019]');
+    const m=raw.match(re);
+    return m?m[1].trim():'';
+  }
+
+  const cfg={
+    apiKey:         extract('apiKey'),
+    authDomain:     extract('authDomain'),
+    databaseURL:    extract('databaseURL'),
+    projectId:      extract('projectId'),
+    storageBucket:  extract('storageBucket'),
+    messagingSenderId: extract('messagingSenderId'),
+    appId:          extract('appId'),
+    measurementId:  extract('measurementId')
+  };
+
+  if(!cfg.apiKey){
+    showErr('❌ 找不到 apiKey，請確認貼上完整的 firebaseConfig 內容');return;}
+  if(!cfg.databaseURL){
+    // try to auto-fill from projectId
+    if(cfg.projectId){
+      cfg.databaseURL='https://'+cfg.projectId+'-default-rtdb.firebaseio.com';
+      showErr('⚠️ 未找到 databaseURL，已自動填入：'+cfg.databaseURL+'，如連線失敗請手動確認');
+    } else {
+      showErr('❌ 缺少 databaseURL，請確認已在 Firebase 建立 Realtime Database');return;
+    }
+  }
+
+  localStorage.setItem('hy_fb_cfg',JSON.stringify(cfg));
   initFirebase(cfg);
 }
+
 function showErr(m){const e=document.getElementById('cfg-err');e.textContent=m;e.style.display='block';}
 
 function useDemoMode(){
