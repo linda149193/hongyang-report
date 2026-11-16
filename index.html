@@ -73,7 +73,19 @@ input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 #sbar-editor{font-weight:600;color:#555;max-width:160px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
-#sbar-time{margin-left:auto;font-size:10px;color:#ccc}
+#sbar-time{font-size:10px;color:#ccc}
+#sbar-sheet{margin-left:auto;font-size:11px;color:#888;white-space:nowrap;cursor:pointer}
+#sbar-sheet.err{color:#dc2626}
+.btn-link{background:#ecfdf5;color:#047857;border:1.5px solid #a7f3d0}
+.btn-nudge{background:#fffbeb;color:#b45309;border:1.5px solid #fcd34d}
+.btn.spin-ico span{display:inline-block;animation:spin .8s linear infinite}
+.fld input:disabled{background:#f5f5f3;color:#888;border-style:dashed}
+.tgt-inp[readonly]{background:#f5f5f3;color:#888;border-style:dashed;cursor:default}
+.auto-note{background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:9px;
+  padding:9px 12px;font-size:12px;line-height:1.6;margin-bottom:12px}
+.lk-steps{font-size:13px;color:#555;line-height:1.8;margin:0 0 14px 18px}
+.lk-err{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:10px 12px;
+  border-radius:9px;font-size:12px;margin-top:10px;line-height:1.6;display:none}
 
 /* ══ LAYOUT ══ */
 .wrap{max-width:1400px;margin:0 auto;padding:0 20px 60px}
@@ -364,6 +376,7 @@ input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none}
     <span class="user-dot"></span>
     <span id="users-count">1</span> 人在線
   </span>
+  <span id="sbar-sheet" onclick="openSheetLink()"></span>
   <span id="sbar-time"></span>
 </div>
 
@@ -392,7 +405,7 @@ const CC={phone:'#3b82f6',aiot:'#059669',tablet:'#8b5cf6',tv:'#ef4444',vacuum:'#
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    DATA MODEL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-function blank(id,name){return{id,name,
+function blank(id,name){return{id,name,sid:'',
   currentGMV:0,previousGMV:0,
   trafficCurrent:0,trafficPrevious:0,conversionRate:0,prevConversionRate:0,
   aiotCurrent:0,aiotPrevious:0,
@@ -406,7 +419,15 @@ function blank(id,name){return{id,name,
   monthlyTargetGMV:0,monthPhoneTarget:0,monthTabletTarget:0};}
 
 const META_DEF={period:{current:'04/26–05/02',previous:'04/19–04/25'},
-  month:'2026年04月',storeCount:3,region:'台灣中部'};
+  month:'2026年04月',storeCount:3,region:'台灣中部',sheetUrl:'',monthThrough:'',lastSync:0};
+
+/* 由 Google 試算表自動帶入的欄位（其餘 TV／掃地機維持手動） */
+const AUTO_KEYS=['currentGMV','previousGMV','trafficCurrent','trafficPrevious',
+  'conversionRate','prevConversionRate','aiotCurrent','aiotPrevious',
+  'phoneSO','phonePrevSO','phoneGMV','tabletSO','tabletPrevSO','tabletGMV',
+  'monthlyAccumGMV','monthPhoneSO','monthTabletSO','monthAiotGMV'];
+const TGT_KEYS=['monthlyTargetGMV','monthPhoneTarget','monthTabletTarget'];
+
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    STATE
@@ -416,6 +437,7 @@ let META=clone(META_DEF);
 let SS=[blank('a','台中大里'),blank('b','台中豐原'),blank('c','台中大魯閣')];
 let tab='weekly', sel=0, _charts={}, _dirty=false;
 let _myName='';
+let _syncing=false,_lastSync=0,_syncTxt='',_syncErr=false,_started=false;
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    FIREBASE SETUP
@@ -501,7 +523,14 @@ function initFirebase(cfg){
         setEl('sbar-time', d.lastTime||'');
       }
     }
-    recalc();render();
+    normalize();recalc();render();
+    startAutoSync();
+  },err=>{
+    /* 雲端資料庫拒絕連線時，改用本機模式，試算表同步照常運作 */
+    console.error(err);hideLoading();db=null;
+    useDemoMode();
+    setEl('sbar-txt','雲端資料庫無法連線（僅存本機）');
+    const dot=document.getElementById('sdot');if(dot)dot.className='sdot off';
   });
 
   /* presence — count online users */
@@ -530,7 +559,18 @@ function launchApp(){
   const dot=document.getElementById('sdot');
   if(dot)dot.className='sdot on';
   setEl('sbar-txt','示範模式（僅存本機）');
-  recalc();render();
+  normalize();recalc();render();
+  startAutoSync();
+}
+
+/* 補齊舊資料缺少的欄位（Firebase 不會存空陣列／空字串） */
+function normalize(){
+  if(!Array.isArray(SS))SS=Object.values(SS||{});
+  SS=SS.filter(Boolean).map((s,i)=>Object.assign(blank(s.id||'s'+i,s.name||'門店'+(i+1)),s));
+  if(!SS.length)SS=[blank('a','門店1')];
+  META=Object.assign(clone(META_DEF),META||{});
+  META.period=Object.assign(clone(META_DEF.period),META.period||{});
+  if(sel>=SS.length)sel=0;
 }
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -657,6 +697,8 @@ function render(){
   document.getElementById('pnl-chart').innerHTML=buildChartView();
   SS.forEach((_,i)=>bindTgt(i));
   showPanel(tab);
+  if(!_syncErr&&!_syncing)_syncTxt=syncLabel();
+  setSyncStatus(_syncTxt,_syncErr);
   if(tab==='chart')setTimeout(buildCharts,60);
 }
 function showPanel(id){
@@ -688,13 +730,17 @@ function buildHdr(){return`
   <div class="hdr-right">
     <div class="period-box" onclick="openPeriod()">
       本週 <strong>${META.period.current}</strong> vs 上週 <strong>${META.period.previous}</strong><br>
-      <span class="tag">台數 = 淨銷售（已扣退貨）✏️</span>
+      <span class="tag">${linked()?'🔗 數據來自 Google 試算表':'台數 = 淨銷售（已扣退貨）✏️'}</span>
     </div>
+    ${linked()
+      ?`<button class="btn btn-link btn-sm" id="btn-sync" onclick="syncSheet(true)" title="立即從 Google 試算表更新"><span>🔄</span> 更新</button>`
+      :`<button class="btn btn-nudge btn-sm" onclick="openSheetLink()">🔗 連結試算表</button>`}
     <button class="btn btn-muted btn-sm" onclick="openWkEdit()">✏️ 週</button>
     <button class="btn btn-muted btn-sm" onclick="openMoEdit(sel)">📊 月</button>
     <button class="btn btn-muted btn-sm" onclick="openPeriod()">📅</button>
     <button class="btn btn-ghost btn-sm" onclick="document.getElementById('fileInput').click()">📥</button>
     <button class="btn btn-dark btn-sm" onclick="doExport()">📤</button>
+    ${linked()?`<button class="btn btn-ghost btn-sm" onclick="openSheetLink()" title="試算表連結設定">🔗</button>`:''}
     <button class="btn btn-red btn-sm" onclick="switchAccount()">⚙️</button>
   </div>
 </div>`;}
@@ -841,7 +887,7 @@ function buildMonthly(){
       <div class="kpi-sub" id="mkpi-gt">目標 ${fG(mo.t)}</div></div>
     <div class="kpi"><div class="kpi-lbl">月 GMV 達成率</div>
       <div class="kpi-val" id="mkpi-r" style="color:${pc(mo.r)}">${fR(mo.r)}</div>
-      <div class="kpi-sub">上月達成</div></div>
+      <div class="kpi-sub">${META.monthThrough?'累計至 '+esc(META.monthThrough):'本月累計'}</div></div>
     <div class="kpi"><div class="kpi-lbl">月手機 SO</div>
       <div class="kpi-val" id="mkpi-ph">${mo.ph} 台</div>
       <div class="kpi-sub" id="mkpi-pht">目標 ${mo.phT} 台</div></div>
@@ -853,7 +899,7 @@ function buildMonthly(){
 <div class="sec">
   <div class="sec-lbl">各門店月達成明細
     <span style="font-size:10px;color:#ccc;font-weight:400;letter-spacing:0;
-      text-transform:none;margin-left:8px">目標欄位可直接修改，Enter 儲存</span>
+      text-transform:none;margin-left:8px">${linked()?'🔗 虛線框的目標由試算表「目標」分頁帶入':'目標欄位可直接修改，Enter 儲存'}</span>
   </div>
   <div class="mo-grid" id="mo-grid">${SS.map((s,i)=>moCard(s,i)).join('')}</div>
 </div>`;}
@@ -872,7 +918,7 @@ function moCard(s,i){
   const ti=(key,val,isGMV)=>`
     <div class="tgt-wrap">
       ${isGMV?'<span class="tgt-pre">NT$</span>':''}
-      <input class="tgt-inp" type="number" inputmode="numeric"
+      <input class="tgt-inp" type="number" inputmode="numeric"${locked(s,key)?' readonly title="由試算表「目標」分頁帶入"':''}
         data-si="${i}" data-key="${key}" value="${val}" placeholder="0"
         oninput="this.classList.add('dirty')"
         onkeydown="tgtKey(event,this)"
@@ -976,12 +1022,13 @@ function openPeriod(){mount('pM',`
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-handle"></div>
     <div class="modal-title"><span>📅 編輯報表期間</span><button class="mx" onclick="closeM('pM')">✕</button></div>
+    ${linked()?'<div class="auto-note">🔗 期間與月份跟著試算表走：請到「鴻揚總表」改「區間」那一列，APP 會自動跟上。</div>':''}
     <div class="pb"><div class="pb-lbl">📆 週報期間</div><div class="p2">
-      <div class="fld"><label>本週期間</label><input id="pC" value="${META.period.current}"></div>
-      <div class="fld"><label>上週期間</label><input id="pP" value="${META.period.previous}"></div>
+      <div class="fld"><label>本週期間</label><input id="pC" value="${META.period.current}"${linked()?' disabled':''}></div>
+      <div class="fld"><label>上週期間</label><input id="pP" value="${META.period.previous}"${linked()?' disabled':''}></div>
     </div></div>
     <div class="pb"><div class="pb-lbl">🏢 基本資訊</div><div class="p2">
-      <div class="fld"><label>報表月份</label><input id="pM2" value="${META.month}"></div>
+      <div class="fld"><label>報表月份</label><input id="pM2" value="${META.month}"${linked()?' disabled':''}></div>
       <div class="fld"><label>所屬區域</label><input id="pR" value="${META.region}"></div>
     </div></div>
     <div class="mfoot">
@@ -996,11 +1043,12 @@ function svPeriod(){
   META.month=gv('pM2')||META.month;META.region=gv('pR')||META.region;
   closeM('pM');saveData('期間設定');render();toast('📅 期間已更新！');}
 function rstPeriod(){if(!confirm('確定還原預設？'))return;
-  META=clone(META_DEF);closeM('pM');saveData('期間設定');render();toast('↩️ 已還原');}
+  const keep={sheetUrl:META.sheetUrl,monthThrough:META.monthThrough,lastSync:META.lastSync};
+  META=Object.assign(clone(META_DEF),keep);closeM('pM');saveData('期間設定');render();toast('↩️ 已還原');syncSheet(false);}
 
 function openWkEdit(){
   const s=SS[sel];
-  const f=(l,k)=>`<div class="fld"><label>${l}</label><input type="number" data-wk="${k}" value="${s[k]}" step="any"></div>`;
+  const f=(l,k)=>`<div class="fld"><label>${l}${isAuto(k)?' 🔗':''}</label><input type="number" data-wk="${k}" value="${s[k]}" step="any"${isAuto(k)?' disabled':''}></div>`;
   mount('wM',`
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-handle"></div>
@@ -1009,6 +1057,7 @@ function openWkEdit(){
       style="border:1.5px solid #e0e0e0;border-radius:9px;padding:10px 12px;font-size:15px;width:100%;margin-bottom:14px">
       ${SS.map((st,i)=>`<option value="${i}"${i===sel?' selected':''}>${st.name}</option>`).join('')}
     </select>
+    ${autoNote()}
     <div class="mg" id="wF">
       <div class="ms">GMV</div>
       ${f('本週 GMV','currentGMV')}${f('上週 GMV','previousGMV')}
@@ -1033,7 +1082,7 @@ function openWkEdit(){
   </div>`);}
 function svWk(){
   const s=SS[sel];
-  document.querySelectorAll('#wF input[data-wk]').forEach(el=>{
+  document.querySelectorAll('#wF input[data-wk]:not(:disabled)').forEach(el=>{
     const k=el.dataset.wk;if(k in s)s[k]=parseFloat(el.value)||0;});
   recalc();closeM('wM');
   document.getElementById('pnl-weekly').innerHTML=buildWeekly();
@@ -1041,8 +1090,9 @@ function svWk(){
 
 function openMoEdit(i){
   sel=i;const s=SS[i];
-  const f=(l,k,h='')=>`<div class="fld"><label>${l}</label>
-    <input type="number" data-mo="${k}" value="${s[k]}" step="any">
+  const off=k=>isAuto(k)||locked(s,k);
+  const f=(l,k,h='')=>`<div class="fld"><label>${l}${off(k)?' 🔗':''}</label>
+    <input type="number" data-mo="${k}" value="${s[k]}" step="any"${off(k)?' disabled':''}>
     ${h?`<span class="fld-hint">${h}</span>`:''}</div>`;
   mount('mM',`
   <div class="modal" onclick="event.stopPropagation()">
@@ -1052,6 +1102,7 @@ function openMoEdit(i){
       style="border:1.5px solid #e0e0e0;border-radius:9px;padding:10px 12px;font-size:15px;width:100%;margin-bottom:14px">
       ${SS.map((st,j)=>`<option value="${j}"${j===i?' selected':''}>${st.name}</option>`).join('')}
     </select>
+    ${autoNote()}
     <div class="mg" id="mF">
       <div class="ms">月 GMV（實際 / 目標）</div>
       ${f('月累積 GMV（實際）','monthlyAccumGMV','達成率 = 累積 ÷ 目標')}${f('月目標 GMV','monthlyTargetGMV')}
@@ -1072,13 +1123,169 @@ function openMoEdit(i){
   </div>`);}
 function svMo(){
   const s=SS[sel];
-  document.querySelectorAll('#mF input[data-mo]').forEach(el=>{
+  document.querySelectorAll('#mF input[data-mo]:not(:disabled)').forEach(el=>{
     const k=el.dataset.mo;if(k in s)s[k]=parseFloat(el.value)||0;});
   recalc();closeM('mM');
   const card=document.getElementById('mc-'+sel);
   if(card){const t=document.createElement('div');t.innerHTML=moCard(SS[sel],sel);
     card.replaceWith(t.firstElementChild);bindTgt(sel);}
   refreshMoKPI();refreshWkCards();_dirty=true;saveData(s.name);toast('✅ 月數據已更新並同步！');}
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   GOOGLE 試算表自動同步
+   APP 呼叫試算表上的 Apps Script 網頁應用程式，
+   取回本週／上週／本月數字後覆蓋 AUTO_KEYS 欄位。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+function linked(){return !!(META&&META.sheetUrl);}
+function isAuto(k){return linked()&&AUTO_KEYS.includes(k);}
+function locked(s,k){return linked()&&(s.lockT||[]).includes(k);}
+function esc(v){return String(v==null?'':v).replace(/[<>&"'`]/g,'');}
+function autoNote(){return linked()?'<div class="auto-note">🔗 標示的欄位由 Google 試算表自動帶入，不需手動輸入；TV、掃地機仍請在這裡填寫。</div>':'';}
+function validSheetUrl(u){return /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(u);}
+
+async function fetchSheet(url){
+  let res;
+  try{res=await fetch(url+'?t='+Date.now(),{redirect:'follow',cache:'no-store'});}
+  catch(e){throw new Error('連不到試算表。請確認網路，以及部署時「誰可以存取」選的是「所有人」。');}
+  if(!res.ok)throw new Error('試算表回應錯誤（'+res.status+'）。請確認網址是最新部署的版本。');
+  let d;
+  try{d=JSON.parse(await res.text());}
+  catch(e){throw new Error('回傳的不是報表資料。請確認部署時「誰可以存取」選的是「所有人」。');}
+  if(!d||d.ok!==true)throw new Error((d&&d.error)||'試算表沒有回傳資料');
+  if(!Array.isArray(d.stores)||!d.stores.length)throw new Error('試算表裡找不到門店資料');
+  return d;
+}
+
+/* 把試算表的數字併進 SS；回傳是否有任何變動 */
+function applySheet(d){
+  const snap=()=>JSON.stringify([SS.map(s=>[s.sid,s.name,s.lockT||[],...AUTO_KEYS.map(k=>s[k]),...TGT_KEYS.map(k=>s[k])]),
+    META.period,META.month,META.storeCount,META.monthThrough]);
+  const before=snap();
+  const core=n=>esc(n).replace(/小米之家|授權店|台中/g,'');
+  const old=SS.slice(),used=new Set();
+  const pick=test=>{const i=old.findIndex((o,j)=>!used.has(j)&&test(o));if(i>=0)used.add(i);return i>=0?old[i]:null;};
+  SS=d.stores.map((st,idx)=>{
+    const sid=esc(st.sid),name=esc(st.name)||'門店'+(idx+1);
+    /* 先比門店ID，再比名稱，最後比關鍵字（例：台中豐原 ↔ 豐原太平洋），保留原本手動填的 TV／掃地機 */
+    const s=pick(o=>sid&&o.sid===sid)
+      ||pick(o=>!o.sid&&o.name===name)
+      ||pick(o=>{if(o.sid)return false;const a=core(o.name);
+          return a.length>=2&&(core(name)+'|'+core(st.fullName)).includes(a);})
+      ||blank('s'+Date.now().toString(36)+idx,name);
+    s.sid=sid;s.name=name;
+    AUTO_KEYS.forEach(k=>{s[k]=Number(st[k])||0;});
+    s.lockT=[];
+    TGT_KEYS.forEach(k=>{const v=Number(st[k]);if(st[k]!=null&&v>0){s[k]=v;s.lockT.push(k);}});
+    return s;
+  });
+  if(sel>=SS.length)sel=0;
+  if(d.period&&d.period.current)META.period={current:esc(d.period.current),previous:esc(d.period.previous)};
+  if(d.month)META.month=esc(d.month);
+  META.monthThrough=esc(d.monthThrough);
+  META.storeCount=SS.length;
+  return snap()!==before;
+}
+
+/* 最近一個週二 00:00（台灣時間）的時間戳 */
+function lastTuesday(){
+  const TZ=8*3600e3,DAY=86400e3,local=Date.now()+TZ;
+  const day0=Math.floor(local/DAY)*DAY,dow=new Date(day0).getUTCDay();
+  return day0-((dow-2+7)%7)*DAY-TZ;
+}
+/* 這週二之後還沒更新過 → 該更新了 */
+function syncDue(){return linked()&&(Number(META.lastSync)||0)<lastTuesday();}
+function syncLabel(){
+  const t=Number(META.lastSync)||0;if(!linked())return'';
+  if(!t)return'📊 試算表尚未更新';
+  const d=new Date(t),p=n=>String(n).padStart(2,'0');
+  return`📊 試算表 ${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} 更新`;
+}
+
+function setSyncStatus(txt,err){
+  _syncTxt=txt;_syncErr=!!err;
+  const el=document.getElementById('sbar-sheet');
+  if(el){el.textContent=txt;el.classList.toggle('err',_syncErr);}
+  const b=document.getElementById('btn-sync');
+  if(b)b.classList.toggle('spin-ico',_syncing);
+}
+
+async function syncSheet(manual){
+  if(!linked()){if(manual)openSheetLink();return;}
+  if(_syncing)return;
+  /* 自動更新時，若正在編輯就先不打斷 */
+  if(!manual&&(document.querySelector('.modal-bg')||
+      (document.activeElement&&document.activeElement.classList.contains('tgt-inp'))))return;
+  _syncing=true;setSyncStatus('📊 試算表更新中…');
+  try{
+    const d=await fetchSheet(META.sheetUrl);
+    const changed=applySheet(d);
+    _lastSync=Date.now();_syncing=false;
+    META.lastSync=_lastSync;_syncTxt=syncLabel();_syncErr=false;
+    recalc();if(changed)_dirty=true;
+    saveData('Google 試算表');render();
+    if(manual)toast(changed?'🔄 已從試算表更新數據':'✅ 已是最新數據');
+  }catch(e){
+    console.error(e);_syncing=false;_lastSync=Date.now();
+    setSyncStatus('⚠️ 試算表讀取失敗（點此檢查）',true);
+    if(manual)toast('⚠️ '+e.message,5000);
+  }
+}
+
+/* 每週二自動更新一次：週二（含）之後第一次打開或切回 APP 時去撈，其餘時間不動 */
+function startAutoSync(){
+  if(_started)return;_started=true;
+  _syncTxt=syncLabel();setSyncStatus(_syncTxt,false);
+  if(syncDue())syncSheet(false);
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden&&syncDue()&&Date.now()-_lastSync>60*1000)syncSheet(false);});
+}
+
+function openSheetLink(){
+  mount('lM',`
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title"><span>🔗 連結 Google 試算表</span><button class="mx" onclick="closeM('lM')">✕</button></div>
+    ${linked()?`<div class="auto-note">已連結。每週二自動去試算表撈一次最新數據（週二當天第一次打開 APP 時），其餘時間數字固定不動；臨時要更新可按「🔄 更新」。</div>`:`
+    <ol class="lk-steps">
+      <li>打開「鴻揚月報」試算表 →「擴充功能」→「Apps Script」</li>
+      <li>把 <strong>Code.gs</strong> 的內容整份貼上並儲存</li>
+      <li>右上「部署」→「新增部署作業」→ 類型選「網頁應用程式」<br>
+        執行身分：<strong>我</strong>　誰可以存取：<strong>所有人</strong></li>
+      <li>複製「網頁應用程式」網址，貼到下面</li>
+    </ol>`}
+    <div class="fld"><label>網頁應用程式網址</label>
+      <input id="lkU" value="${esc(META.sheetUrl)}" placeholder="https://script.google.com/macros/s/…/exec"
+        autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    <div class="lk-err" id="lkE"></div>
+    <div class="mfoot">
+      ${linked()?`<button class="btn btn-red" onclick="unlinkSheet()">取消連結</button>`:''}
+      <button class="btn btn-ghost" onclick="closeM('lM')">關閉</button>
+      <button class="btn btn-dark" id="lkB" onclick="saveSheetLink()">✅ 測試並儲存</button>
+    </div>
+  </div>`);}
+
+async function saveSheetLink(){
+  const errEl=document.getElementById('lkE'),btn=document.getElementById('lkB');
+  const fail=m=>{errEl.textContent=m;errEl.style.display='block';btn.disabled=false;btn.textContent='✅ 測試並儲存';};
+  const url=gv('lkU').split('?')[0];
+  errEl.style.display='none';
+  if(!validSheetUrl(url)){fail('網址格式不對。要貼的是部署後的「網頁應用程式」網址，開頭是 https://script.google.com/macros/s/ 、結尾是 /exec（不是試算表本身的網址）。');return;}
+  btn.disabled=true;btn.textContent='測試中…';
+  let d;
+  try{d=await fetchSheet(url);}catch(e){fail(e.message);return;}
+  META.sheetUrl=url;
+  applySheet(d);_lastSync=Date.now();
+  META.lastSync=_lastSync;_syncTxt=syncLabel();_syncErr=false;
+  recalc();_dirty=true;closeM('lM');saveData('Google 試算表');render();
+  toast(`🔗 連結成功！已帶入 ${SS.length} 間門店（${META.period.current}）`,4000);
+}
+
+function unlinkSheet(){
+  if(!confirm('取消連結後，數據會停在目前的數字，之後要改回手動輸入。確定嗎？'))return;
+  META.sheetUrl='';META.lastSync=0;SS.forEach(s=>{s.lockT=[];});
+  _syncTxt='';_syncErr=false;
+  closeM('lM');saveData('取消試算表連結');render();toast('已取消連結');
+}
 
 /* ━━━ EXCEL ━━━ */
 function doExport(){
